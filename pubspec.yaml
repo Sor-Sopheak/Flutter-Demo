@@ -40,6 +40,9 @@ dependencies:
   flutter_svg: ^2.2.2
   syncfusion_flutter_calendar: ^31.1.19
   intl: ^0.20.2
+  timetable: ^1.0.0-alpha.15
+  flutter_timetable: ^1.1.6
+  flutter_week_view: ^1.4.3
 
 dev_dependencies:
   flutter_test:
