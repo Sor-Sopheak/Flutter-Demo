@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_demo/constants/color_constants.dart';
 import 'package:flutter_week_view/flutter_week_view.dart';
 import 'package:intl/intl.dart';
 
-// --- 1. CalendarPage Widget ---
+// Extension to help with time-only operations (not part of the package)
+extension on DateTime {
+  DateTime get withoutSpecificTime => DateTime(year, month, day);
+}
+
 class CalendarPage extends StatefulWidget {
   const CalendarPage({super.key});
 
@@ -11,76 +16,91 @@ class CalendarPage extends StatefulWidget {
 }
 
 class _CalendarPageState extends State<CalendarPage> {
-  // State variables for tracking the selection
   DateTime? dragStart;
   DateTime? dragEnd;
   List<FlutterWeekViewEvent> _events = []; // Temporary selection visualization
-  List<FlutterWeekViewEvent> _permanentEvents = []; // NEW: List to store confirmed, permanent events
+  List<FlutterWeekViewEvent> _permanentEvents = [];
+  List<FlutterWeekViewEvent> _blockEvents = [];
+  List<String> _filterOptions = [
+    'Internal',
+    'External',
+  ]; //A = internal, B = external
+  String _selectedFilter = 'Internal';
 
-  // Configuration Constants
-  final double _hourRowHeight = 60.0;
-  final GlobalKey _dayViewKey = GlobalKey(); // Key to find the widget's position
-  // final DateTime _targetDate = DateTime.now().withoutSpecificTime;
+  final double _hourRowHeight = 45.0;
+  final GlobalKey _dayViewKey =
+      GlobalKey(); // Key to find the widget's position
 
-  // State variable for the currently displayed date (needed for navigation)
-  DateTime _currentDate =
-      DateTime.now()
-          .withoutSpecificTime; // Use withoutSpecificTime from extension
+  DateTime _currentDate = DateTime.now().withoutSpecificTime;
   static const int _startHour = 6;
   static const int _endHour = 22;
-  static const int _slotMinutes = 30;   // NEW: Slot granularity
+  static const int _slotMinutes = 30; // NEW: Slot granularity
 
   @override
   void initState() {
     super.initState();
-    // Add a couple of initial events for testing conflict detection
     DateTime now = DateTime.now().withoutSpecificTime;
-    _permanentEvents.add(FlutterWeekViewEvent(
-      title: 'Busy Slot (8:30 - 9:30)',
-      description: 'Pre-existing Meeting',
-      start: now.copyWith(hour: 8, minute: 30),
-      end: now.copyWith(hour: 9, minute: 30),
-    ));
-    _permanentEvents.add(FlutterWeekViewEvent(
-      title: 'Lunch Break (12:00 - 1:00)',
-      description: 'Scheduled Break',
-      start: now.copyWith(hour: 12, minute: 0),
-      end: now.copyWith(hour: 13, minute: 0),
-    ));
+    _permanentEvents.add(
+      FlutterWeekViewEvent(
+        title: 'Busy Slot (8:30 - 9:30)',
+        description: 'Internal',
+        start: now.copyWith(hour: 8, minute: 30),
+        end: now.copyWith(hour: 9, minute: 30),
+      ),
+    );
+    _permanentEvents.add(
+      FlutterWeekViewEvent(
+        title: 'Lunch Break (12:00 - 1:00)',
+        description: 'External',
+        start: now.copyWith(hour: 12, minute: 0),
+        end: now.copyWith(hour: 13, minute: 0),
+      ),
+    );
+
+    _generateBlockEvents(_currentDate);
   }
 
   String _formatTime(DateTime dt) {
-    // Simple format: 11/18/2025 09:30 AM (Customize as needed)
     return '${dt.month}/${dt.day}/${dt.year} ${dt.hour % 12}:${dt.minute.toString().padLeft(2, '0')} ${dt.hour >= 12 ? 'PM' : 'AM'}';
   }
 
+  //for column hour
+  String _formatHourColumnTime(TimeOfDay time) {
+    final now = DateTime.now();
+    final dt = DateTime(now.year, now.month, now.day, time.hour, time.minute);
+    return '\n${DateFormat('h:mm a').format(dt)}';
+  }
+
   // --- 2. Coordinate Conversion Logic ---
-  // This is the core manual logic for converting screen pixels (yOffset) to time.
   DateTime _offsetToTime(double yOffset) {
     double totalMinutesFromStartHour = (yOffset / _hourRowHeight) * 60;
-    
+
     // Total minutes from midnight (00:00)
-    int totalMinutesFromMidnight = (_startHour * 60) + totalMinutesFromStartHour.round();
+    int totalMinutesFromMidnight =
+        (_startHour * 60) + totalMinutesFromStartHour.round();
 
     // Snapping to the nearest _slotMinutes (30 minutes)
-    int snappedMinutesFromMidnight = (totalMinutesFromMidnight / _slotMinutes).round() * _slotMinutes;
+    int snappedMinutesFromMidnight =
+        (totalMinutesFromMidnight / _slotMinutes).round() * _slotMinutes;
 
-    DateTime calculatedTime = _currentDate.add(Duration(minutes: snappedMinutesFromMidnight));
-    
+    DateTime calculatedTime = _currentDate.add(
+      Duration(minutes: snappedMinutesFromMidnight),
+    );
+
     // Define max time for the view (22:00)
     DateTime maxTime = _currentDate.copyWith(
-        hour: _endHour, 
-        minute: 0, 
-        second: 0, 
-        millisecond: 0, 
-        microsecond: 0
+      hour: _endHour,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+      microsecond: 0,
     );
-    
+
     // If the calculation exceeds the max time, snap to max time
     if (calculatedTime.isAfter(maxTime)) {
-        return maxTime;
+      return maxTime;
     }
-    
+
     return calculatedTime.copyWith(second: 0, millisecond: 0, microsecond: 0);
   }
 
@@ -112,55 +132,65 @@ class _CalendarPageState extends State<CalendarPage> {
     });
   }
 
-  // The DayView's Time Range is captured here and the dialog is shown.
   void _handleDragEnd(DragEndDetails details) {
     if (dragStart != null && dragEnd != null) {
       DateTime selection1 = dragStart!;
       DateTime selection2 = dragEnd!;
 
-      // FIX: Determine the true start and end using isBefore/isAfter to avoid the 'Never' type error.
       DateTime start =
           selection1.isBefore(selection2) ? selection1 : selection2;
       DateTime end = selection2.isAfter(selection1) ? selection2 : selection1;
 
-      // Minimum duration for a valid selection is one slot (30 minutes)
       if (end.difference(start).inMinutes < _slotMinutes) {
-         end = start.add(const Duration(minutes: _slotMinutes));
+        end = start.add(const Duration(minutes: _slotMinutes));
       }
 
-      // Check for conflict
+      // 1. Conflict Check (Checks against all existing immovable slots)
       if (_isConflict(start, end)) {
         setState(() {
           dragStart = null;
           dragEnd = null;
           _events = [];
         });
-        _showConflictMessage(context, start, end);
-        return; 
+        // _showConflictMessage(context, start, end);
+        return;
       }
 
-      // Trigger the modal popup with the final range
-      _showSelectionDetailsDialog(start, end);
+      // --- 2. Event Confirmation and Intelligent Addition ---
+      final newEventType = _selectedFilter;
+
+      FlutterWeekViewEvent newPermanentEvent = FlutterWeekViewEvent(
+        title: 'New ${newEventType} Slot',
+        description: newEventType,
+        start: start,
+        end: end,
+      );
+
+      setState(() {
+        // Add the new event to the permanent list
+        _permanentEvents.add(newPermanentEvent);
+
+        // Clear the temporary drag visualization
+        dragStart = null;
+        dragEnd = null;
+        _events = [];
+
+        // Trigger Block Generation: This ensures the new event's block
+        // boundaries are calculated and displayed immediately.
+        _generateBlockEvents(_currentDate);
+      });
     }
   }
 
-  // --- 4. Conflict Detection Logic (NEW) ---
   bool _isConflict(DateTime newStart, DateTime newEnd) {
-    // Ensure the new time range is valid
-    if (newStart.isAtSameMomentAs(newEnd)) {
-      return false; // A zero-length slot can't conflict (although logic prevents this)
-    }
+    final immovableEvents = [..._permanentEvents, ..._blockEvents];
 
-    for (final event in _permanentEvents) {
-      final existingStart = event.start;
-      final existingEnd = event.end;
+    for (final event in immovableEvents) {
+      DateTime existingStart = event.start;
+      DateTime existingEnd = event.end;
 
-      // Check for overlap: 
-      // 1. New event starts strictly before existing event ends AND 
-      // 2. New event ends strictly after existing event starts.
-      // Events touching (e.g., 7:00-7:30 and 7:30-8:00) are allowed.
       if (newStart.isBefore(existingEnd) && newEnd.isAfter(existingStart)) {
-        return true; 
+        return true;
       }
     }
     return false;
@@ -171,8 +201,6 @@ class _CalendarPageState extends State<CalendarPage> {
     if (dragStart != null && dragEnd != null) {
       DateTime selection1 = dragStart!;
       DateTime selection2 = dragEnd!;
-
-      // FIX 1: Use isBefore/isAfter instead of min/max to resolve the 'Never' type error.
       // Ensure 'start' is always the earlier time and 'end' is always the later time.
       DateTime start =
           selection1.isBefore(selection2) ? selection1 : selection2;
@@ -197,20 +225,35 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   // --- 6. Modal Dialogs ---
-  void _showConflictMessage(BuildContext context, DateTime start, DateTime end) {
+  void _showConflictMessage(
+    BuildContext context,
+    DateTime start,
+    DateTime end,
+  ) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15.0),
+          ),
           backgroundColor: Colors.red.shade50,
-          title: const Text('Slot Unavailable 🚫', style: TextStyle(color: Colors.red)),
+          title: const Text(
+            'Slot Unavailable 🚫',
+            style: TextStyle(color: Colors.red),
+          ),
           content: Text(
             'The time slot from ${_formatTime(start)} to ${_formatTime(end)} conflicts with an existing event. Please choose an empty time slot.',
           ),
           actions: <Widget>[
             TextButton(
-              child: const Text('OK', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'OK',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               onPressed: () {
                 Navigator.of(context).pop();
               },
@@ -306,6 +349,25 @@ class _CalendarPageState extends State<CalendarPage> {
     });
   }
 
+  String _getMonthName(int month) {
+    const names = [
+      '',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return names[month];
+  }
+
   // --- 6. Navigation and Header Functions ---
   void _goToPreviousWeek() {
     setState(() {
@@ -333,25 +395,74 @@ class _CalendarPageState extends State<CalendarPage> {
     }
   }
 
+  Widget _buildDropdownFilter() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8.0),
+        border: Border.all(color: Theme.of(context).primaryColor, width: 1.0),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedFilter,
+          icon: Icon(
+            Icons.arrow_drop_down,
+            color: Theme.of(context).primaryColor,
+          ),
+          // Style the text of the selected item
+          style: TextStyle(
+            color: Theme.of(context).primaryColor,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+
+          onChanged: (String? newValue) {
+            if (newValue != null) {
+              setState(() {
+                _selectedFilter = newValue;
+                _generateBlockEvents(_currentDate);
+              });
+            }
+          },
+          items:
+              _filterOptions.map<DropdownMenuItem<String>>((String value) {
+                return DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                );
+              }).toList(),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCalendarHeader() {
-    DateTime startOfWeek = _currentDate.subtract(Duration(days: _currentDate.weekday - 1));
+    DateTime startOfWeek = _currentDate.subtract(
+      Duration(days: _currentDate.weekday - 1),
+    );
     DateTime endOfWeek = startOfWeek.add(const Duration(days: 6));
-    
+
     String headerText;
     if (startOfWeek.month == endOfWeek.month) {
-        headerText = '${_getMonthName(startOfWeek.month)} ${startOfWeek.day} - ${endOfWeek.day}, ${startOfWeek.year}';
+      headerText = '${_getMonthName(startOfWeek.month)} ${startOfWeek.year}';
     } else {
-        headerText = '${_getMonthName(startOfWeek.month)} ${startOfWeek.day} - ${_getMonthName(endOfWeek.month)} ${endOfWeek.day}, ${endOfWeek.year}';
+      headerText =
+          '${_getMonthName(startOfWeek.month)} ${endOfWeek.day}, ${endOfWeek.year}';
     }
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 8.0),
-      color: Theme.of(context).primaryColor, // Use primary color for main header
+      color: Color(whiteColor),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
           IconButton(
-            icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 16),
+            icon: const Icon(
+              Icons.arrow_back_ios,
+              color: Color(blueColor),
+              size: 16,
+            ),
             onPressed: _goToPreviousWeek,
           ),
           GestureDetector(
@@ -359,14 +470,18 @@ class _CalendarPageState extends State<CalendarPage> {
             child: Text(
               headerText,
               style: const TextStyle(
-                color: Colors.white, 
-                fontWeight: FontWeight.bold, 
-                fontSize: 18
+                color: Color(blackColor),
+                fontWeight: FontWeight.w500,
+                fontSize: 20,
               ),
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 16),
+            icon: const Icon(
+              Icons.arrow_forward_ios,
+              color: Color(blueColor),
+              size: 16,
+            ),
             onPressed: _goToNextWeek,
           ),
         ],
@@ -376,57 +491,70 @@ class _CalendarPageState extends State<CalendarPage> {
 
   // --- NEW: Weekday Selector Header ---
   Widget _buildDayOfWeekSelector() {
-    // Find the Monday of the current week (ISO 8601 starts with Monday = 1)
-    DateTime startOfWeek = _currentDate.subtract(Duration(days: _currentDate.weekday - 1));
-    
+    DateTime startOfWeek = _currentDate.subtract(
+      Duration(days: _currentDate.weekday - 1),
+    );
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
-      color: Theme.of(context).primaryColor.withOpacity(0.9),
+      color: Color(whiteColor),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: List.generate(7, (index) {
           DateTime day = startOfWeek.add(Duration(days: index));
           bool isSelected = day.isAtSameMomentAs(_currentDate);
-          
+
+          Color dayTextColor = Color(primaryTextColor); // Default for weekdays
+          if (day.weekday == DateTime.saturday ||
+              day.weekday == DateTime.sunday) {
+            dayTextColor = Colors.red; // Red for weekends
+          }
+          if (isSelected) {
+            dayTextColor = Color(whiteColor);
+          }
+
           return Expanded(
             child: GestureDetector(
               onTap: () {
                 setState(() {
-                  _currentDate = day;
+                  _currentDate = day.withoutSpecificTime;
                 });
               },
-              child: Column(
-                children: [
-                  // Weekday Text (Mon, Tue, etc.)
-                  Text(
-                    DateFormat('E').format(day), // 'E' gives short day name (Mon)
-                    style: TextStyle(
-                      color: isSelected ? Colors.yellowAccent : Colors.white70,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  // Day Number Circle
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: isSelected ? Colors.white : Colors.transparent,
-                      shape: BoxShape.circle,
-                      border: isSelected 
-                          ? Border.all(color: Colors.transparent)
-                          : Border.all(color: Colors.white38),
-                    ),
-                    child: Text(
-                      day.day.toString(),
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: isSelected ? Color(blueColor) : Colors.transparent,
+                  shape: BoxShape.rectangle,
+                  borderRadius:
+                      isSelected
+                          ? BorderRadius.circular(4)
+                          : BorderRadius.circular(0),
+                ),
+                child: Column(
+                  children: [
+                    // Weekday Text (Mon, Tue, etc.)
+                    Text(
+                      DateFormat(
+                        'E',
+                      ).format(day), // 'E' gives short day name (Mon)
                       style: TextStyle(
-                        color: isSelected ? Theme.of(context).primaryColor : Colors.white,
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                        fontSize: 12,
+                        color: dayTextColor,
+                        fontWeight: FontWeight.w400,
+                        fontSize: 15,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      day.day.toString(),
+                      style: TextStyle(
+                        color: dayTextColor,
+                        fontWeight:
+                            isSelected ? FontWeight.w500 : FontWeight.normal,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
@@ -434,22 +562,51 @@ class _CalendarPageState extends State<CalendarPage> {
       ),
     );
   }
-  
-  String _getMonthName(int month) {
-    const names = [
-      '', 'January', 'February', 'March', 'April', 'May', 'June', 
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return names[month];
-  }
 
   // --- 8. Custom Event Builder ---
-  Widget _customEventBuilder(FlutterWeekViewEvent event, double top, double height) {
-    Color color = event.description == 'Temporary' 
-        ? Colors.red.withOpacity(0.4) 
-        : Colors.blue.withOpacity(0.6);
-        
-    Color borderColor = event.description == 'Temporary' ? Colors.red.shade900 : Colors.blue.shade900;
+  Widget _customEventBuilder(
+    FlutterWeekViewEvent event,
+    double top,
+    double height,
+  ) {
+    if (event.description == 'Blocked') {
+      return Container(
+        decoration: BoxDecoration(
+          color: Colors.grey.shade400.withOpacity(0.6), // Grey color for block
+          borderRadius: BorderRadius.circular(4.0),
+          border: Border.all(color: Colors.grey.shade600, width: 1.0),
+        ),
+        padding: const EdgeInsets.all(4.0),
+        child: Center(
+          child: Text(
+            'BLOCKED', // Display text for block slot
+            style: TextStyle(color: Colors.grey.shade700, fontSize: 10),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    Color color;
+    Color borderColor;
+    String type =
+        event
+            .description; // Get the type ('Internal', 'External', or 'Temporary')
+
+    if (type == 'Temporary') {
+      color = Colors.red.withOpacity(0.4);
+      borderColor = Colors.red.shade900;
+    } else if (type == 'Internal') {
+      color = Colors.blue.withOpacity(0.6); // Internal (A) color
+      borderColor = Colors.blue.shade900;
+    } else if (type == 'External') {
+      color = Colors.green.withOpacity(0.6); // External (B) color
+      borderColor = Colors.green.shade900;
+    } else {
+      // Default/Fallback
+      color = Colors.purple.withOpacity(0.6);
+      borderColor = Colors.purple.shade900;
+    }
 
     return Container(
       decoration: BoxDecoration(
@@ -473,90 +630,201 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // Filter permanent events to only show those for the currently selected day
-    List<FlutterWeekViewEvent> filteredEvents = _permanentEvents.where((event) {
-      return event.start.withoutSpecificTime.isAtSameMomentAs(_currentDate);
-    }).toList();
+  void _generateBlockEvents(DateTime date) {
+    final blockDuration = const Duration(minutes: 30);
+    final currentFilter = _selectedFilter;
+    List<FlutterWeekViewEvent> newBlocks = [];
 
-    const TimeOfDay _startTime = TimeOfDay(hour: 6, minute: 0);
+    for (final event in _permanentEvents) {
+      if (!event.start.withoutSpecificTime.isAtSameMomentAs(date)) {
+        continue; // Skip events not on the current day
+      }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Drag Time Selection (flutter_week_view)"),
-      ),
-      body: Column(
-        children: [
-          // 1. Calendar Navigation Header (Month/Week Navigation)
-          _buildCalendarHeader(), 
-          
-          // 2. Day of Week Selector (Mon - Sun buttons)
-          _buildDayOfWeekSelector(), 
-          
-          // 3. Day View (Expanded to take remaining space)
-          Expanded(
-            child: GestureDetector(
-              key: _dayViewKey, // The key is critical for coordinate calculation
-              behavior: HitTestBehavior.opaque,
-              onVerticalDragStart: _handleDragStart,
-              onVerticalDragUpdate: _handleDragUpdate,
-              onVerticalDragEnd: _handleDragEnd,
-              child: DayView(
-                // Use the new state variable for the date
-                date: _currentDate,
-                events: [..._events, ...filteredEvents],
-            
-                // **CRITICAL FIX:** Replaced eventTextBuilder with the correct property:
-                eventWidgetBuilder: _customEventBuilder,
-            
-                // --- FIX 1: Time Range and Initial Position ---
-                initialTime: const TimeOfDay(hour: _startHour, minute: 0), 
-                
-                // ⬇️ CRITICAL FIX: Set minimumTime to 5:30 AM ⬇️
-                // This forces the 6:00 AM hour label to display below the top boundary.
-                minimumTime: const TimeOfDay(hour: 5, minute: 50), 
-                
-                // The maximum time remains correct for the end boundary
-                maximumTime: const TimeOfDay(hour: _endHour, minute: 0),
-                // --- FIX 2: Disable Zoom ---
-                userZoomable: false,
+      final existingType = event.description;
+      DateTime existingStart = event.start;
+      DateTime existingEnd = event.end;
 
-                // dayBarStyle: const DayBarStyle(
-                //   color: Colors.transparent, // Make background transparent
-                //   decoration: BoxDecoration()
-                // ),
-            
-                // 2. Set the row height via DayViewStyle
-                style: DayViewStyle(
-                  hourRowHeight: _hourRowHeight, // <--- FIXED HOUR ROW HEIGHT
-                  headerSize: 0.0,
-                  // minuteSplit: _slotMinutes, 
-                  // backgroundSpanDecoration: BoxDecoration(
-                  //   color: Colors.grey.shade100,
-                  // )
-                ),
-                
-                // 3. Set the column style (kept separate for completeness)
-                hourColumnStyle: HourColumnStyle(
-                  width: 60,
-                  textStyle: TextStyle(color: Theme.of(context).primaryColor, fontSize: 10),
-                  // separatorColor: Theme.of(context).primaryColor,
-                  // separatorThickness: 1.0,
-                ),
-            
-                // CRITICAL: Disable internal scrolling/interaction
-                inScrollableWidget: false,
-              ),
+      // --- CASE 1: Current Filter is 'Internal' (A) ---
+      if (currentFilter == 'Internal') {
+        if (existingType == 'External') {
+          newBlocks.add(
+            FlutterWeekViewEvent(
+              title: 'Blocked (Internal)',
+              description: 'Blocked',
+              start: existingStart.subtract(blockDuration),
+              end: existingStart,
             ),
+          );
+        }
+      }
+
+      // --- CASE 2: Current Filter is 'External' (B) ---
+      if (currentFilter == 'External') {
+        if (existingType == 'Internal') {
+          newBlocks.add(
+            FlutterWeekViewEvent(
+              title: 'Blocked (External)',
+              description: 'Blocked',
+              start: existingEnd,
+              end: existingEnd.add(blockDuration),
+            ),
+          );
+          // newBlocks.add(
+          //   FlutterWeekViewEvent(
+          //     title: 'Blocked (External)',
+          //     description: 'Blocked',
+          //     start: existingStart.subtract(blockDuration),
+          //     end: existingStart,
+          //   ),
+          // );
+          // newBlocks.add(
+          //   FlutterWeekViewEvent(
+          //     title: 'Blocked (External)',
+          //     description: 'Blocked',
+          //     start: existingEnd,
+          //     end: existingEnd.add(blockDuration),
+          //   ),
+          // );
+        }
+        // 💡 NEW Rule 2B: Existing External (B) -> Block before AND after
+        else if (existingType == 'External') {
+          newBlocks.add(
+            FlutterWeekViewEvent(
+              title: 'Blocked (External)',
+              description: 'Blocked',
+              start: existingStart.subtract(blockDuration),
+              end: existingStart,
+            ),
+          );
+          newBlocks.add(
+            FlutterWeekViewEvent(
+              title: 'Blocked (External)',
+              description: 'Blocked',
+              start: existingEnd,
+              end: existingEnd.add(blockDuration),
+            ),
+          );
+          // newBlocks.add(
+          //   FlutterWeekViewEvent(
+          //     title: 'Blocked (External)',
+          //     description: 'Blocked',
+          //     start: existingStart.subtract(blockDuration),
+          //     end: existingStart,
+          //   ),
+          // );
+          // newBlocks.add(
+          //   FlutterWeekViewEvent(
+          //     title: 'Blocked (External)',
+          //     description: 'Blocked',
+          //     start: existingEnd,
+          //     end: existingEnd.add(blockDuration),
+          //   ),
+          // );
+        }
+      }
+    }
+
+    // Update state with new blocks
+    setState(() {
+      _blockEvents = newBlocks;
+    });
+  }
+
+  Widget _buildRoomInfoSector() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Digital meeting room A1 Building A 1st Floor',
+            style: TextStyle(
+              color: Color(blackColor),
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
+          ),
+          Row(
+            children: [
+              Icon(
+                Icons.people_alt_outlined,
+                color: Color(iconGreyColor),
+                size: 18,
+              ),
+              SizedBox(width: 4),
+              Text(
+                'Contain 10 people',
+                style: TextStyle(
+                  color: Color(primaryTextColor),
+                  fontWeight: FontWeight.w400,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-}
 
-// Extension to help with time-only operations (not part of the package)
-extension on DateTime {
-  DateTime get withoutSpecificTime => DateTime(year, month, day);
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+      appBar: AppBar(title: const Text("Room information (flutter_week_view)")),
+      body: Container(
+        color: Color(whiteColor),
+        child: Column(
+          children: [
+            _buildDropdownFilter(),
+            _buildCalendarHeader(),
+            _buildDayOfWeekSelector(),
+            _buildRoomInfoSector(),
+            Divider(color: Color(0xFFE5E5E5), thickness: 1),
+            Expanded(
+              child: GestureDetector(
+                key: _dayViewKey,
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragStart: _handleDragStart,
+                onVerticalDragUpdate: _handleDragUpdate,
+                onVerticalDragEnd: _handleDragEnd,
+                child: DayView(
+                  date: _currentDate,
+                  events: [..._permanentEvents, ..._blockEvents, ..._events],
+                  eventWidgetBuilder: _customEventBuilder,
+                  initialTime: const TimeOfDay(hour: _startHour, minute: 0),
+                  minimumTime: const TimeOfDay(hour: 5, minute: 50),
+                  maximumTime: const TimeOfDay(hour: _endHour, minute: 0),
+                  userZoomable: false,
+                  inScrollableWidget: false, //true = drag not work
+                  style: DayViewStyle(
+                    hourRowHeight: _hourRowHeight,
+                    headerSize: 0.0,
+                    backgroundColor: Color(whiteColor),
+                    backgroundRulesColor: Color(0XFFD8E3FF),
+                    currentTimeRuleColor: Colors.transparent,
+                  ),
+                  hourColumnStyle: HourColumnStyle(
+                    width: 80,
+                    textAlignment: Alignment.center,
+                    textStyle: TextStyle(
+                      color: Color(primaryTextColor),
+                      fontSize: 12,
+                    ),
+                    timeFormatter: _formatHourColumnTime,
+                    decoration: BoxDecoration(
+                      border: Border(
+                        right: BorderSide(color: Color(0XFFD8E3FF), width: 1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
